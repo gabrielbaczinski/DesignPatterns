@@ -43,18 +43,16 @@ export class FormBuilder {
   }
 }
 
-// Sub-builder para campo independente — .add() volta ao FormBuilder
-export class FieldBuilder {
-  private config: Partial<FieldConfig> = {};
-  private validators: Validator[] = [];
-  private groupName?: string;
+// Classe base genérica que elimina a duplicação entre FieldBuilder e GroupFieldBuilder.
+// TReturn é o tipo retornado por add(), permitindo que cada sub-builder mantenha
+// o tipo correto no encadeamento fluente (FormBuilder ou GroupBuilder).
+abstract class BaseFieldBuilder<TReturn> {
+  protected config: Partial<FieldConfig> = {};
+  protected validators: Validator[] = [];
+  protected readonly fieldName: string;
 
-  constructor(
-    private readonly fieldName: string,
-    type: FieldType,
-    label: string,
-    private readonly formBuilder: FormBuilder,
-  ) {
+  constructor(fieldName: string, type: FieldType, label: string) {
+    this.fieldName = fieldName;
     this.config = { type, label };
   }
 
@@ -79,68 +77,59 @@ export class FieldBuilder {
     return this;
   }
 
+  protected buildField(): Field {
+    return new Field(this.fieldName, {
+      ...(this.config as FieldConfig),
+      validators: this.validators,
+    });
+  }
+
+  abstract add(): TReturn;
+}
+
+// Sub-builder para campo independente — add() retorna ao FormBuilder
+export class FieldBuilder extends BaseFieldBuilder<FormBuilder> {
+  private groupName?: string;
+
+  constructor(
+    fieldName: string,
+    type: FieldType,
+    label: string,
+    private readonly formBuilder: FormBuilder,
+  ) {
+    super(fieldName, type, label);
+  }
+
   inGroup(groupName: string): this {
     this.groupName = groupName;
     return this;
   }
 
   add(): FormBuilder {
-    const field = new Field(this.fieldName, {
-      ...(this.config as FieldConfig),
-      validators: this.validators,
-    });
-    this.formBuilder._addField(field, this.groupName);
+    this.formBuilder._addField(this.buildField(), this.groupName);
     return this.formBuilder;
   }
 }
 
-// Sub-builder para campos dentro de um grupo — .add() volta ao GroupBuilder
-class GroupFieldBuilder {
-  private config: Partial<FieldConfig> = {};
-  private validators: Validator[] = [];
-
+// Sub-builder para campos dentro de um grupo — add() retorna ao GroupBuilder
+class GroupFieldBuilder extends BaseFieldBuilder<GroupBuilder> {
   constructor(
-    private readonly fieldName: string,
+    fieldName: string,
     type: FieldType,
     label: string,
     private readonly group: FieldGroup,
     private readonly groupBuilder: GroupBuilder,
   ) {
-    this.config = { type, label };
+    super(fieldName, type, label);
   }
 
-  placeholder(text: string): this {
-    this.config.placeholder = text;
-    return this;
-  }
-
-  defaultValue(value: unknown): this {
-    this.config.defaultValue = value;
-    return this;
-  }
-
-  options(opts: SelectOption[]): this {
-    this.config.options = opts;
-    return this;
-  }
-
-  validate(...validators: Validator[]): this {
-    this.validators.push(...validators);
-    return this;
-  }
-
-  // Retorna GroupBuilder para continuar encadeando campos no mesmo grupo
   add(): GroupBuilder {
-    const field = new Field(this.fieldName, {
-      ...(this.config as FieldConfig),
-      validators: this.validators,
-    });
-    this.group.add(field);
+    this.group.add(this.buildField());
     return this.groupBuilder;
   }
 }
 
-// Sub-builder para FieldGroup — .end() volta ao FormBuilder
+// Sub-builder para FieldGroup — end() retorna ao FormBuilder
 export class GroupBuilder {
   constructor(
     private readonly groupName: string,
