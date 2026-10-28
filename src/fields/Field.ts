@@ -1,102 +1,89 @@
-import { Validator, FieldState, FieldConfig, FieldEvent, FieldEventType, FormComponent } from '../types';
-import { EventEmitter } from '../events/EventEmitter';
+import { EventEmitter, type Listener, type Unsubscribe } from '../events/EventEmitter';
+import type { FormVisitor } from '../visitors/FormVisitor';
+import type { FormComponent } from './FormComponent';
+import type { FieldConfig, FieldState } from './types';
+import { assertValidName } from './path';
 
-// Composite Pattern: Field é o "Leaf" — componente folha sem filhos
+export interface FieldEvents {
+  change: { field: Field; value: unknown };
+  validate: { field: Field; valid: boolean; errors: readonly string[] };
+}
+
+/** Composite — folha: um campo do formulário, com estado próprio. */
 export class Field implements FormComponent {
   readonly name: string;
   readonly config: FieldConfig;
 
   private state: FieldState;
-  private validators: Validator[];
-
-  // Observer Pattern: cada campo é também um emissor de eventos
-  private emitter = new EventEmitter<Record<FieldEventType, FieldEvent>>();
+  // Observer: o campo notifica mudanças de valor e resultados de validação.
+  private readonly events = new EventEmitter<FieldEvents>();
+  // Identifica a validação mais recente; resultados de validações antigas são descartados.
+  private validationRun = 0;
 
   constructor(name: string, config: FieldConfig) {
+    assertValidName(name);
     this.name = name;
     this.config = config;
-    this.validators = config.validators ?? [];
-    this.state = {
-      value: config.defaultValue ?? '',
-      touched: false,
-      dirty: false,
-      valid: true,
-      errors: [],
-    };
+    this.state = this.initialState();
   }
 
   getValue(): unknown {
     return this.state.value;
   }
 
+  /** O estado é imutável: cada mudança gera um novo objeto. */
+  getState(): FieldState {
+    return this.state;
+  }
+
   setValue(value: unknown): void {
-    const changed = value !== this.state.value;
-    this.state = { ...this.state, value, dirty: true };
-    if (changed) {
-      this.emitter.emit('change', {
-        type: 'change',
-        fieldName: this.name,
-        value,
-        state: { ...this.state },
-      });
-    }
+    if (value === this.state.value) return;
+    this.state = { ...this.state, value, dirty: value !== this.initialValue() };
+    this.events.emit('change', { field: this, value });
   }
 
-  touch(): void {
-    this.state = { ...this.state, touched: true };
-    this.emitter.emit('blur', {
-      type: 'blur',
-      fieldName: this.name,
-      value: this.state.value,
-      state: { ...this.state },
-    });
-  }
-
-  // Strategy Pattern em ação: percorre os validadores e executa cada estratégia
+  /**
+   * Strategy em ação: executa todos os validadores (em paralelo, já que
+   * podem ser assíncronos) sem saber qual regra cada um implementa.
+   */
   async validate(): Promise<boolean> {
-    const errors: string[] = [];
+    const run = ++this.validationRun;
+    const value = this.state.value;
+    this.state = { ...this.state, validating: true };
 
-    for (const validator of this.validators) {
-      const result = await validator.validate(this.state.value);
-      if (!result.valid && result.message) {
-        errors.push(result.message);
-      }
-    }
-
+    const results = await Promise.all(
+      (this.config.validators ?? []).map(validator => validator.validate(value)),
+    );
+    const errors = results.flatMap(result => (result.valid ? [] : [result.message]));
     const valid = errors.length === 0;
-    this.state = { ...this.state, valid, errors };
 
-    this.emitter.emit('validate', {
-      type: 'validate',
-      fieldName: this.name,
-      value: this.state.value,
-      state: { ...this.state },
-    });
-
+    // Se o usuário digitou de novo (ou o form foi resetado) durante uma validação
+    // assíncrona, este resultado está desatualizado e não sobrescreve o estado.
+    if (run === this.validationRun) {
+      this.state = { ...this.state, validating: false, valid, errors };
+      this.events.emit('validate', { field: this, valid, errors });
+    }
     return valid;
   }
 
-  getState(): FieldState {
-    return { ...this.state };
-  }
-
   reset(): void {
-    this.state = {
-      value: this.config.defaultValue ?? '',
-      touched: false,
-      dirty: false,
-      valid: true,
-      errors: [],
-    };
+    this.validationRun++;
+    this.state = this.initialState();
   }
 
-  addValidator(validator: Validator): this {
-    this.validators.push(validator);
-    return this;
+  accept<R>(visitor: FormVisitor<R>, path: string): R {
+    return visitor.visitField(this, path);
   }
 
-  // Observer Pattern: expõe API de inscrição de eventos
-  on(eventType: FieldEventType, listener: (event: FieldEvent) => void): () => void {
-    return this.emitter.on(eventType, listener);
+  on<K extends keyof FieldEvents>(event: K, listener: Listener<FieldEvents[K]>): Unsubscribe {
+    return this.events.on(event, listener);
+  }
+
+  private initialValue(): unknown {
+    return this.config.defaultValue ?? '';
+  }
+
+  private initialState(): FieldState {
+    return { value: this.initialValue(), dirty: false, validating: false, valid: true, errors: [] };
   }
 }

@@ -1,82 +1,63 @@
-import { FormComponent, FieldState } from '../types';
-import { Field } from './Field';
+import type { FormVisitor } from '../visitors/FormVisitor';
+import type { FormComponent } from './FormComponent';
+import { assertValidName } from './path';
 
-// Composite Pattern: FieldGroup é o "Composite" — contém Fields e outros FieldGroups.
-// O cliente usa Field e FieldGroup de forma uniforme via interface FormComponent,
-// sem saber se está lidando com um campo simples ou um grupo aninhado.
+/**
+ * Composite — composto: agrupa campos e outros grupos (ex.: endereço).
+ *
+ * Cada operação é repassada aos filhos, de forma recursiva. A estrutura é
+ * definida no construtor e não muda depois, então não existe grupo
+ * "pela metade" nem filho com nome repetido.
+ */
 export class FieldGroup implements FormComponent {
   readonly name: string;
-  private children: Map<string, FormComponent> = new Map();
+  readonly label: string | undefined;
 
-  constructor(name: string) {
+  private readonly children: readonly FormComponent[];
+  private readonly byName: ReadonlyMap<string, FormComponent>;
+
+  constructor(name: string, children: readonly FormComponent[], label?: string) {
+    assertValidName(name);
     this.name = name;
+    this.label = label;
+    this.children = [...children];
+    this.byName = new Map(this.children.map(child => [child.name, child]));
+
+    if (this.byName.size !== this.children.length) {
+      throw new Error(`O grupo "${name}" tem componentes com nomes repetidos.`);
+    }
   }
 
-  add(component: FormComponent): this {
-    this.children.set(component.name, component);
-    return this;
+  getChildren(): readonly FormComponent[] {
+    return this.children;
   }
 
-  remove(componentName: string): this {
-    this.children.delete(componentName);
-    return this;
-  }
-
-  get(componentName: string): FormComponent | undefined {
-    return this.children.get(componentName);
-  }
-
-  getField(name: string): Field | undefined {
-    const component = this.children.get(name);
-    return component instanceof Field ? component : undefined;
-  }
-
-  // Retorna o valor de todos os filhos como objeto plano
   getValue(): Record<string, unknown> {
-    const values: Record<string, unknown> = {};
-    this.children.forEach((child, key) => {
-      values[key] = child.getValue();
-    });
-    return values;
+    return Object.fromEntries(this.children.map(child => [child.name, child.getValue()]));
   }
 
-  // Distribui o setValue para os filhos correspondentes
+  /** Recebe um objeto parcial, ex.: { cidade: 'Curitiba' }. */
   setValue(value: unknown): void {
-    if (typeof value !== 'object' || value === null) return;
-    const obj = value as Record<string, unknown>;
-    Object.entries(obj).forEach(([key, val]) => {
-      const child = this.children.get(key);
-      if (child) child.setValue(val);
-    });
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new TypeError(`O grupo "${this.name}" espera um objeto como valor.`);
+    }
+    for (const [key, childValue] of Object.entries(value)) {
+      const child = this.byName.get(key);
+      if (!child) throw new Error(`O grupo "${this.name}" não tem o campo "${key}".`);
+      child.setValue(childValue);
+    }
   }
 
-  // Valida todos os filhos e agrega o resultado (operação recursiva no Composite)
   async validate(): Promise<boolean> {
-    const results = await Promise.all(
-      Array.from(this.children.values()).map(child => child.validate())
-    );
+    const results = await Promise.all(this.children.map(child => child.validate()));
     return results.every(Boolean);
-  }
-
-  // Agrega os estados de todos os filhos
-  getState(): Record<string, FieldState> {
-    const states: Record<string, FieldState> = {};
-    this.children.forEach((child, key) => {
-      const childState = child.getState();
-      if ('value' in childState) {
-        states[key] = childState as FieldState;
-      } else {
-        Object.assign(states, childState);
-      }
-    });
-    return states;
   }
 
   reset(): void {
     this.children.forEach(child => child.reset());
   }
 
-  get size(): number {
-    return this.children.size;
+  accept<R>(visitor: FormVisitor<R>, path: string): R {
+    return visitor.visitGroup(this, path);
   }
 }

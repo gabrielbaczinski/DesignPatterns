@@ -1,43 +1,27 @@
-// Observer Pattern: permite que objetos se inscrevam e recebam notificações
-// de eventos sem acoplamento direto entre emissores e ouvintes.
-export type EventListener<T> = (event: T) => void;
+export type Listener<T> = (payload: T) => void;
+export type Unsubscribe = () => void;
 
-export class EventEmitter<TEvents extends Record<string, unknown>> {
-  private listeners: {
-    [K in keyof TEvents]?: Array<EventListener<TEvents[K]>>;
-  } = {};
+/**
+ * Observer — o "Subject" genérico usado por Field e Form.
+ *
+ * `Events` é um mapa { nomeDoEvento: tipoDoPayload }, então cada `on()`
+ * recebe o payload já tipado. A classe é interna: Field e Form a usam por
+ * composição e expõem só `on()`, assim apenas a biblioteca dispara eventos.
+ */
+export class EventEmitter<Events extends object> {
+  private readonly listeners: { [K in keyof Events]?: Set<Listener<Events[K]>> } = {};
 
-  // Inscreve um ouvinte (Observer) para um tipo de evento
-  on<K extends keyof TEvents>(eventType: K, listener: EventListener<TEvents[K]>): () => void {
-    if (!this.listeners[eventType]) {
-      this.listeners[eventType] = [];
-    }
-    this.listeners[eventType]!.push(listener);
-
-    // Retorna função para cancelar inscrição (unsubscribe)
-    return () => this.off(eventType, listener);
+  on<K extends keyof Events>(event: K, listener: Listener<Events[K]>): Unsubscribe {
+    const set = this.listeners[event] ?? new Set<Listener<Events[K]>>();
+    this.listeners[event] = set;
+    set.add(listener);
+    return () => {
+      set.delete(listener);
+    };
   }
 
-  // Remove um ouvinte específico
-  off<K extends keyof TEvents>(eventType: K, listener: EventListener<TEvents[K]>): void {
-    const handlers = this.listeners[eventType];
-    if (!handlers) return;
-    this.listeners[eventType] = handlers.filter(h => h !== listener) as typeof handlers;
-  }
-
-  // Notifica todos os ouvintes inscritos (Subject notifica Observers)
-  emit<K extends keyof TEvents>(eventType: K, event: TEvents[K]): void {
-    const handlers = this.listeners[eventType];
-    if (!handlers) return;
-    handlers.forEach(handler => handler(event));
-  }
-
-  // Remove todos os ouvintes de um tipo de evento
-  removeAllListeners<K extends keyof TEvents>(eventType?: K): void {
-    if (eventType) {
-      delete this.listeners[eventType];
-    } else {
-      this.listeners = {};
-    }
+  emit<K extends keyof Events>(event: K, payload: Events[K]): void {
+    // Copia antes de iterar: um ouvinte pode cancelar a inscrição durante o emit.
+    [...(this.listeners[event] ?? [])].forEach(listener => listener(payload));
   }
 }

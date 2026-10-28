@@ -1,85 +1,60 @@
 /**
- * Exemplo 2: Extensibilidade — validator customizado e assíncrono.
- * O desenvolvedor implementa a interface Validator (Strategy) sem
- * modificar o código da biblioteca (Open/Closed Principle).
+ * Exemplo 2 — cliente estende a VALIDAÇÃO (Strategy).
+ * Duas regras novas, criadas fora da biblioteca, sem alterar o código dela.
  */
 import {
-  Validator,
-  ValidationResult,
   FormBuilder,
   RequiredValidator,
+  ValueValidator,
+  type ValidationResult,
+  type Validator,
 } from '../src';
 
-// ─── Validator customizado síncrono ────────────────────────────────────────
-// O cliente cria uma nova Strategy sem tocar no código da lib
-class NoBadWordsValidator implements Validator {
-  readonly name = 'noBadWords';
-  private readonly badWords = ['spam', 'fake', 'test'];
-
-  validate(value: unknown): ValidationResult {
-    const str = String(value).toLowerCase();
-    const found = this.badWords.find(word => str.includes(word));
-    return found
-      ? { valid: false, message: `Content contains disallowed word: "${found}"` }
-      : { valid: true };
+// Regra síncrona. Estende ValueValidator, que já ignora valor vazio (Template Method).
+class CpfValidator extends ValueValidator {
+  protected check(value: unknown): ValidationResult {
+    return /^\d{3}\.\d{3}\.\d{3}-\d{2}$/.test(String(value))
+      ? { valid: true }
+      : { valid: false, message: 'CPF deve estar no formato 000.000.000-00' };
   }
 }
 
-// ─── Validator customizado assíncrono ──────────────────────────────────────
-// Simula verificação de username único via API
-class UniqueUsernameValidator implements Validator {
-  readonly name = 'uniqueUsername';
-  private readonly takenUsernames = ['admin', 'root', 'user123'];
+// Regra assíncrona. Implementa Validator direto e simula uma consulta a uma API.
+class UsuarioDisponivelValidator implements Validator {
+  private readonly emUso = ['admin', 'root'];
 
   async validate(value: unknown): Promise<ValidationResult> {
-    // Simula latência de rede
-    await new Promise(resolve => setTimeout(resolve, 50));
-
-    const username = String(value).toLowerCase();
-    const isTaken = this.takenUsernames.includes(username);
-    return isTaken
-      ? { valid: false, message: `Username "${value}" is already taken` }
+    await new Promise(resolve => setTimeout(resolve, 100)); // latência de rede
+    return this.emUso.includes(String(value).toLowerCase())
+      ? { valid: false, message: `O usuário "${value}" já está em uso` }
       : { valid: true };
   }
 }
 
-async function main() {
-  // Builder monta o formulário usando os validators customizados do cliente
-  const form = new FormBuilder('profile')
-    .field('username', 'text', 'Username')
-      .validate(
-        new RequiredValidator(),
-        new UniqueUsernameValidator(),  // async custom Strategy
-        new NoBadWordsValidator()       // sync custom Strategy
-      )
+async function main(): Promise<void> {
+  const form = new FormBuilder('perfil')
+    .field('usuario', 'text', 'Usuário')
+      .validate(new RequiredValidator(), new UsuarioDisponivelValidator())
       .add()
-    .field('bio', 'textarea', 'Bio')
-      .validate(new NoBadWordsValidator())
+    .field('cpf', 'text', 'CPF')
+      .validate(new CpfValidator())
       .add()
     .build();
 
-  console.log('--- Test: taken username ---');
-  form.setValue('username', 'admin');
-  const r1 = await form.submit();
-  console.log('Valid:', r1.valid);
-  console.log('Errors:', form.getState()['username']?.errors);
+  const usuario = form.getField('usuario');
+  usuario.on('validate', ({ valid }) => console.log(`[validate] usuario válido: ${valid}`));
 
-  form.reset();
+  form.setValue('usuario', 'admin');
+  form.setValue('cpf', '123');
 
-  console.log('\n--- Test: bad word in bio ---');
-  form.setValue('username', 'alice99');
-  form.setValue('bio', 'I send spam every day');
-  const r2 = await form.submit();
-  console.log('Valid:', r2.valid);
-  console.log('Errors:', form.getState()['bio']?.errors);
+  const pendente = form.validate();
+  console.log('Validando... estado intermediário validating =', usuario.getState().validating);
+  await pendente;
+  console.log('Erros:', form.getErrors());
 
-  form.reset();
-
-  console.log('\n--- Test: all valid ---');
-  form.setValue('username', 'alice99');
-  form.setValue('bio', 'I love coding!');
-  const r3 = await form.submit();
-  console.log('Valid:', r3.valid);
+  form.setValue('usuario', 'ayla');
+  form.setValue('cpf', '123.456.789-00');
+  console.log('\nApós corrigir, válido:', (await form.submit()).valid);
 }
 
 main().catch(console.error);

@@ -1,20 +1,41 @@
 {
   "name": "formcraft",
   "version": "1.0.0",
-  "description": "Framework-agnostic form building and validation library using Design Patterns",
+  "description": "Biblioteca TypeScript para construção, validação e renderização de formulários, independente de framework e extensível.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "example": "ts-node examples/basic-usage.ts"
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
+    "typecheck": "tsc",
+    "test": "node --require ts-node/register --test test/builder.test.ts test/form.test.ts test/validators.test.ts test/renderer.test.ts",
+    "example": "ts-node examples/basic-usage.ts",
+    "example:validator": "ts-node examples/custom-validator.ts",
+    "example:group": "ts-node examples/custom-field-group.ts",
+    "example:renderer": "ts-node examples/custom-renderer.ts",
+    "examples": "npm run example && npm run example:validator && npm run example:group && npm run example:renderer"
   },
-  "keywords": ["forms", "validation", "typescript", "design-patterns"],
+  "keywords": [
+    "forms",
+    "validation",
+    "typescript",
+    "design-patterns"
+  ],
+  "author": "Ayla Micheluzzi, Gabriel Baczinski",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gabrielbaczinski/DesignPatterns.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
   "devDependencies": {
-    "typescript": "^5.3.0",
+    "@types/node": "^20.0.0",
     "ts-node": "^10.9.0",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.3.0"
   }
 }

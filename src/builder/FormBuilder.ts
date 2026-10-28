@@ -1,147 +1,103 @@
-import { FieldConfig, FieldType, Validator, SelectOption } from '../types';
+import { Form } from '../Form';
 import { Field } from '../fields/Field';
 import { FieldGroup } from '../fields/FieldGroup';
-import { Form } from '../Form';
+import type { FormComponent } from '../fields/FormComponent';
+import type { FieldConfig, FieldType, SelectOption } from '../fields/types';
+import type { Validator } from '../validation/Validator';
 
-// Builder Pattern: separa a construção complexa de um Form de sua representação.
-// Permite criar formulários passo a passo com uma API fluente (method chaining),
-// evitando construtores com muitos parâmetros e objetos em estados inconsistentes.
-export class FormBuilder {
-  private fields: Map<string, Field> = new Map();
-  private groups: Map<string, FieldGroup> = new Map();
-  private formName: string;
+type Attach = (component: FormComponent) => void;
 
-  constructor(formName: string) {
-    this.formName = formName;
+/**
+ * Builder — parte comum a FormBuilder e GroupBuilder: ambos são "containers"
+ * que recebem campos, grupos (que podem ser aninhados) e componentes prontos.
+ *
+ * Os métodos retornam `this` ou um sub-builder que conhece o seu "pai", então
+ * a cadeia fluente mantém o tipo certo em qualquer nível de aninhamento.
+ */
+export abstract class ContainerBuilder {
+  protected readonly children: FormComponent[] = [];
+
+  field(name: string, type: FieldType, label: string): FieldBuilder<this> {
+    return new FieldBuilder(name, type, label, this, component => this.children.push(component));
   }
 
-  field(name: string, type: FieldType, label: string): FieldBuilder {
-    return new FieldBuilder(name, type, label, this);
+  group(name: string, label?: string): GroupBuilder<this> {
+    return new GroupBuilder(name, label, this, component => this.children.push(component));
   }
 
-  group(groupName: string): GroupBuilder {
-    const grp = new FieldGroup(groupName);
-    this.groups.set(groupName, grp);
-    return new GroupBuilder(groupName, grp, this);
-  }
-
-  _addField(field: Field, groupName?: string): this {
-    if (groupName) {
-      const grp = this.groups.get(groupName);
-      if (grp) grp.add(field);
-    } else {
-      this.fields.set(field.name, field);
-    }
+  /** Ponto de extensão: adiciona um componente do cliente (ex.: subclasse de FieldGroup). */
+  component(component: FormComponent): this {
+    this.children.push(component);
     return this;
-  }
-
-  build(): Form {
-    const form = new Form(this.formName);
-    this.fields.forEach(field => form._addComponent(field));
-    this.groups.forEach(grp => form._addComponent(grp));
-    return form;
   }
 }
 
-// Classe base genérica que elimina a duplicação entre FieldBuilder e GroupFieldBuilder.
-// TReturn é o tipo retornado por add(), permitindo que cada sub-builder mantenha
-// o tipo correto no encadeamento fluente (FormBuilder ou GroupBuilder).
-abstract class BaseFieldBuilder<TReturn> {
-  protected config: Partial<FieldConfig> = {};
-  protected validators: Validator[] = [];
-  protected readonly fieldName: string;
+/** Builder — monta o Form passo a passo; o Form só existe, completo, após build(). */
+export class FormBuilder extends ContainerBuilder {
+  constructor(private readonly formName: string) {
+    super();
+  }
 
-  constructor(fieldName: string, type: FieldType, label: string) {
-    this.fieldName = fieldName;
+  build(): Form {
+    return new Form(this.formName, this.children);
+  }
+}
+
+/** Sub-builder de grupo: end() cria o FieldGroup e volta para quem o abriu. */
+export class GroupBuilder<Parent> extends ContainerBuilder {
+  constructor(
+    private readonly name: string,
+    private readonly label: string | undefined,
+    private readonly parent: Parent,
+    private readonly attach: Attach,
+  ) {
+    super();
+  }
+
+  end(): Parent {
+    this.attach(new FieldGroup(this.name, this.children, this.label));
+    return this.parent;
+  }
+}
+
+/** Sub-builder de campo: add() cria o Field e volta para quem o abriu. */
+export class FieldBuilder<Parent> {
+  private config: FieldConfig;
+  private readonly validators: Validator[] = [];
+
+  constructor(
+    private readonly name: string,
+    type: FieldType,
+    label: string,
+    private readonly parent: Parent,
+    private readonly attach: Attach,
+  ) {
     this.config = { type, label };
   }
 
-  placeholder(text: string): this {
-    this.config.placeholder = text;
+  placeholder(placeholder: string): this {
+    this.config = { ...this.config, placeholder };
     return this;
   }
 
-  defaultValue(value: unknown): this {
-    this.config.defaultValue = value;
+  defaultValue(defaultValue: unknown): this {
+    this.config = { ...this.config, defaultValue };
     return this;
   }
 
-  options(opts: SelectOption[]): this {
-    this.config.options = opts;
+  options(options: readonly SelectOption[]): this {
+    this.config = { ...this.config, options };
     return this;
   }
 
-  // Strategy Pattern: adiciona validadores ao campo
+  /** Strategy: anexa uma ou mais regras de validação ao campo. */
   validate(...validators: Validator[]): this {
     this.validators.push(...validators);
     return this;
   }
 
-  protected buildField(): Field {
-    return new Field(this.fieldName, {
-      ...(this.config as FieldConfig),
-      validators: this.validators,
-    });
-  }
-
-  abstract add(): TReturn;
-}
-
-// Sub-builder para campo independente — add() retorna ao FormBuilder
-export class FieldBuilder extends BaseFieldBuilder<FormBuilder> {
-  private groupName?: string;
-
-  constructor(
-    fieldName: string,
-    type: FieldType,
-    label: string,
-    private readonly formBuilder: FormBuilder,
-  ) {
-    super(fieldName, type, label);
-  }
-
-  inGroup(groupName: string): this {
-    this.groupName = groupName;
-    return this;
-  }
-
-  add(): FormBuilder {
-    this.formBuilder._addField(this.buildField(), this.groupName);
-    return this.formBuilder;
-  }
-}
-
-// Sub-builder para campos dentro de um grupo — add() retorna ao GroupBuilder
-class GroupFieldBuilder extends BaseFieldBuilder<GroupBuilder> {
-  constructor(
-    fieldName: string,
-    type: FieldType,
-    label: string,
-    private readonly group: FieldGroup,
-    private readonly groupBuilder: GroupBuilder,
-  ) {
-    super(fieldName, type, label);
-  }
-
-  add(): GroupBuilder {
-    this.group.add(this.buildField());
-    return this.groupBuilder;
-  }
-}
-
-// Sub-builder para FieldGroup — end() retorna ao FormBuilder
-export class GroupBuilder {
-  constructor(
-    private readonly groupName: string,
-    private readonly group: FieldGroup,
-    private readonly formBuilder: FormBuilder,
-  ) {}
-
-  field(name: string, type: FieldType, label: string): GroupFieldBuilder {
-    return new GroupFieldBuilder(name, type, label, this.group, this);
-  }
-
-  end(): FormBuilder {
-    return this.formBuilder;
+  add(): Parent {
+    this.attach(new Field(this.name, { ...this.config, validators: [...this.validators] }));
+    return this.parent;
   }
 }
